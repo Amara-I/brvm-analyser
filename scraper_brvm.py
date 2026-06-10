@@ -1,360 +1,236 @@
-"""
-Scraper pour les données du marché BRVM (Bourse Régionale des Valeurs Mobilières)
-Source: https://www.brvm.org
-"""
-
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+import json, os, time
+from datetime import datetime, timedelta
 import feedparser
-import time
-import random
-import logging
 
-# Configuration du logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Headers pour simuler un navigateur
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 
-# URL de base
-BASE_URL = "https://www.brvm.org"
-COURS_URL = f"{BASE_URL}/fr/cours-actions/0/symbol"
+CACHE_FILE = "data/historique.json"
+CACHE_DURATION_HOURS = 24
 
+# ── LISTE COMPLÈTE 47 ACTIONS BRVM ──────────────────────────────────────────
+TICKERS_BRVM = [
+    # Télécoms
+    {"ticker":"SNTS","name":"Sonatel","sector":"Télécoms","country":"Sénégal","flag":"🇸🇳"},
+    {"ticker":"ONTBF","name":"Onatel Burkina","sector":"Télécoms","country":"Burkina Faso","flag":"🇧🇫"},
+    {"ticker":"CÔTE","name":"CIE","sector":"Energie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    # Banques
+    {"ticker":"SGBC","name":"SGB CI","sector":"Banques","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"ETIT","name":"Ecobank TI","sector":"Banques","country":"Togo","flag":"🇹🇬"},
+    {"ticker":"BOAB","name":"BOA Bénin","sector":"Banques","country":"Bénin","flag":"🇧🇯"},
+    {"ticker":"BOABF","name":"BOA Burkina","sector":"Banques","country":"Burkina Faso","flag":"🇧🇫"},
+    {"ticker":"BOAC","name":"BOA Côte d'Ivoire","sector":"Banques","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"BOAM","name":"BOA Mali","sector":"Banques","country":"Mali","flag":"🇲🇱"},
+    {"ticker":"BOAN","name":"BOA Niger","sector":"Banques","country":"Niger","flag":"🇳🇪"},
+    {"ticker":"BOAS","name":"BOA Sénégal","sector":"Banques","country":"Sénégal","flag":"🇸🇳"},
+    {"ticker":"CBIBF","name":"Coris Bank","sector":"Banques","country":"Burkina Faso","flag":"🇧🇫"},
+    {"ticker":"BICB","name":"BIC Bénin","sector":"Banques","country":"Bénin","flag":"🇧🇯"},
+    {"ticker":"BICC","name":"BIC CI","sector":"Banques","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"NSBC","name":"NSIA Banque CI","sector":"Banques","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"ORGT","name":"Oragroup Togo","sector":"Banques","country":"Togo","flag":"🇹🇬"},
+    {"ticker":"SIBC","name":"SIB CI","sector":"Banques","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    # Industrie
+    {"ticker":"STBC","name":"SOLIBRA CI","sector":"Industrie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SMBC","name":"SMB CI","sector":"Industrie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"TTLC","name":"TOTAL CI","sector":"Energie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"TTLS","name":"TOTAL Sénégal","sector":"Energie","country":"Sénégal","flag":"🇸🇳"},
+    {"ticker":"PRSC","name":"TRACTAFRIC","sector":"Industrie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"ABJC","name":"MOVIS CI","sector":"Transport","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    # Agriculture
+    {"ticker":"PALC","name":"PALM CI","sector":"Agriculture","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SICC","name":"SICOR CI","sector":"Agriculture","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SOGC","name":"SOGB CI","sector":"Agriculture","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SPHC","name":"SAPH CI","sector":"Agriculture","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    # Distribution
+    {"ticker":"CFAC","name":"CFAO CI","sector":"Distribution","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SDCC","name":"SDCI","sector":"Distribution","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SHEC","name":"SHELL CI","sector":"Energie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    # Assurance
+    {"ticker":"GNSC","name":"GNSS CI","sector":"Assurance","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"NSIA","name":"NSIA CI","sector":"Assurance","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    # Autres
+    {"ticker":"LNBB","name":"Loterie Bénin","sector":"Divertissement","country":"Bénin","flag":"🇧🇯"},
+    {"ticker":"CABC","name":"Sucrivoire CI","sector":"Agro-industrie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"NEIC","name":"NEI-CEDA CI","sector":"Edition","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SVOC","name":"SIVOA CI","sector":"Agro-industrie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"FTSC","name":"Filtisac CI","sector":"Industrie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"CIEC","name":"CIE CI","sector":"Energie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SEMC","name":"SETAO CI","sector":"BTP","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"UNXC","name":"UNIWAX CI","sector":"Textile","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"UNLC","name":"UNILEVER CI","sector":"Distribution","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SLBC","name":"SOLIBRA","sector":"Industrie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SCRC","name":"SUCRIVOIRE","sector":"Agro-industrie","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"BNBC","name":"BICI CI","sector":"Banques","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"SAFC","name":"SAFCA CI","sector":"Finance","country":"Côte d'Ivoire","flag":"🇨🇮"},
+    {"ticker":"STAC","name":"SETACI","sector":"BTP","country":"Côte d'Ivoire","flag":"🇨🇮"},
+]
 
-def get_cours_brvm():
-    """
-    Scrape les cours de toutes les actions BRVM.
-    Returns: DataFrame avec toutes les actions et leurs données
-    """
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_cache(data):
+    os.makedirs("data", exist_ok=True)
+    with open(CACHE_FILE, "w") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def cache_is_fresh():
+    if not os.path.exists(CACHE_FILE):
+        return False
+    mtime = os.path.getmtime(CACHE_FILE)
+    age = time.time() - mtime
+    return age < CACHE_DURATION_HOURS * 3600
+
+def scrape_brvm_cours():
+    """Scrape cours depuis brvm.org"""
     try:
-        logger.info("Démarrage du scraping des cours BRVM...")
-        
-        response = requests.get(COURS_URL, headers=HEADERS, timeout=30)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, 'lxml')
-        
-        # Chercher le tableau des cours
-        table = soup.find('table', {'class': 'table'})
-        
-        if not table:
-            # Essayer autre classe
-            table = soup.find('table')
-        
-        if not table:
-            logger.warning("Aucun tableau trouvé, utilisation des données de fallback")
-            return get_fallback_cours()
-        
-        rows = table.find_all('tr')[1:]  # Skip header
-        
-        data = []
+        url = "https://www.brvm.org/fr/cours-actions/0/all"
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        soup = BeautifulSoup(r.text, "lxml")
+        rows = soup.select("table tbody tr")
+        data = {}
         for row in rows:
-            cols = row.find_all('td')
+            cols = row.find_all("td")
             if len(cols) >= 5:
+                ticker = cols[0].text.strip()
                 try:
-                    symbole = cols[0].get_text(strip=True)
-                    if symbole:
-                        cours = {
-                            'Symbole': symbole,
-                            'Cours': parse_number(cols[1].get_text(strip=True)),
-                            'Variation': parse_number(cols[2].get_text(strip=True)),
-                            'Ouverture': parse_number(cols[3].get_text(strip=True)) if len(cols) > 3 else None,
-                            'Haut': parse_number(cols[4].get_text(strip=True)) if len(cols) > 4 else None,
-                            'Bas': parse_number(cols[5].get_text(strip=True)) if len(cols) > 5 else None,
-                            'Volume': parse_number(cols[6].get_text(strip=True)) if len(cols) > 6 else 0,
-                        }
-                        data.append(cours)
-                except Exception as e:
+                    close = float(cols[3].text.strip().replace(" ","").replace(",","."))
+                    variation = cols[4].text.strip()
+                    volume = cols[5].text.strip() if len(cols) > 5 else "0"
+                    data[ticker] = {
+                        "close": close,
+                        "variation": variation,
+                        "volume": volume,
+                        "date": datetime.now().strftime("%Y-%m-%d")
+                    }
+                except:
                     continue
-        
-        if data:
-            logger.info(f"Données scrapées: {len(data)} actions")
-            return pd.DataFrame(data)
-        else:
-            return get_fallback_cours()
-            
+        return data
     except Exception as e:
-        logger.error(f"Erreur lors du scraping: {e}")
-        return get_fallback_cours()
+        print(f"Erreur scraping BRVM: {e}")
+        return {}
 
-
-def get_historique_brvm(symbole, periode="1an"):
-    """
-    Scrape l'historique des prix pour une action donnée.
-    
-    Args:
-        symbole: Symbole de l'action (ex: 'BRVM.AO')
-        periode: Période desirede (1jour, 1semaine, 1mois, 3mois, 6mois, 1an)
-    
-    Returns: DataFrame avec les données historiques
-    """
+def scrape_sika_historique(ticker, years=10):
+    """Scrape historique depuis sikafinance.com"""
     try:
-        # URL pour l'historique (format猜测)
-        hist_url = f"{BASE_URL}/fr/historique/{symbole}"
-        
-        response = requests.get(hist_url, headers=HEADERS, timeout=30)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, 'lxml')
-        
-        # Chercher les données historiques
-        table = soup.find('table', {'class': 'historical-table'})
-        
-        if not table:
-            # Retourner données simulées basées sur les cours actuels
-            return generer_historique_simule(symbole)
-        
-        rows = table.find_all('tr')[1:]
-        
-        data = []
+        url = f"https://www.sikafinance.com/marches/historique/{ticker}"
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        soup = BeautifulSoup(r.text, "lxml")
+        rows = soup.select("table tbody tr")
+        historique = []
         for row in rows:
-            cols = row.find_all('td')
-            if len(cols) >= 5:
-                data.append({
-                    'Date': cols[0].get_text(strip=True),
-                    'Cours': parse_number(cols[1].get_text(strip=True)),
-                    'Ouverture': parse_number(cols[2].get_text(strip=True)),
-                    'Haut': parse_number(cols[3].get_text(strip=True)),
-                    'Bas': parse_number(cols[4].get_text(strip=True)),
-                    'Volume': parse_number(cols[5].get_text(strip=True)) if len(cols) > 5 else 0,
-                })
-        
-        return pd.DataFrame(data)
-        
+            cols = row.find_all("td")
+            if len(cols) >= 4:
+                try:
+                    date_str = cols[0].text.strip()
+                    close = float(cols[1].text.strip().replace(" ","").replace(",","."))
+                    open_ = float(cols[2].text.strip().replace(" ","").replace(",",".")) if cols[2].text.strip() else close
+                    high = float(cols[3].text.strip().replace(" ","").replace(",",".")) if cols[3].text.strip() else close
+                    low = float(cols[4].text.strip().replace(" ","").replace(",",".")) if len(cols) > 4 and cols[4].text.strip() else close
+                    volume = int(cols[5].text.strip().replace(" ","").replace(",","")) if len(cols) > 5 and cols[5].text.strip().isdigit() else 0
+                    historique.append({
+                        "date": date_str,
+                        "open": open_,
+                        "high": high,
+                        "low": low,
+                        "close": close,
+                        "volume": volume
+                    })
+                except:
+                    continue
+        return historique
     except Exception as e:
-        logger.error(f"Erreur historique {symbole}: {e}")
-        return generer_historique_simule(symbole)
+        print(f"Erreur scraping Sika {ticker}: {e}")
+        return []
 
-
-def generer_historique_simule(symbole):
-    """
-    Génère des données historiques simulées basées sur les cours actuels.
-    Utilisé en cas d'échec du scraping.
-    """
-    import numpy as np
-    from datetime import datetime, timedelta
-    
-    # Cours de base simulé
-    cours_base = random.uniform(1000, 10000)
-    
-    # Générer 365 jours de données
-    dates = [datetime.now() - timedelta(days=i) for i in range(365)]
-    dates.reverse()
-    
-    # Générer des prix avec tendance aléatoire
-    prices = []
-    cours = cours_base
-    for _ in range(365):
-        cours = cours * (1 + random.uniform(-0.03, 0.03))
-        prices.append(cours)
-    
-    df = pd.DataFrame({
-        'Date': dates,
-        'Cours': prices,
-        'Ouverture': [p * random.uniform(0.98, 1.02) for p in prices],
-        'Haut': [p * random.uniform(1.00, 1.05) for p in prices],
-        'Bas': [p * random.uniform(0.95, 1.00) for p in prices],
-        'Volume': [random.randint(1000, 100000) for _ in range(365)]
-    })
-    
-    return df
-
+def scrape_sika_fondamentaux(ticker):
+    """Scrape données fondamentales depuis sikafinance.com"""
+    try:
+        url = f"https://www.sikafinance.com/marches/fichevaleur/{ticker}"
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        soup = BeautifulSoup(r.text, "lxml")
+        data = {}
+        tables = soup.select("table")
+        for table in tables:
+            rows = table.find_all("tr")
+            for row in rows:
+                cols = row.find_all(["td","th"])
+                if len(cols) >= 2:
+                    key = cols[0].text.strip().lower()
+                    val = cols[1].text.strip()
+                    if "per" in key or "p/e" in key:
+                        try: data["per"] = float(val.replace(",","."))
+                        except: pass
+                    elif "capitalisation" in key:
+                        try: data["mktcap"] = val
+                        except: pass
+                    elif "dividende" in key:
+                        try: data["dividende"] = float(val.replace(",",".").replace(" ",""))
+                        except: pass
+                    elif "bénéfice" in key or "benefice" in key:
+                        try: data["benefice"] = val
+                        except: pass
+                    elif "chiffre" in key:
+                        try: data["ca"] = val
+                        except: pass
+        return data
+    except Exception as e:
+        print(f"Erreur fondamentaux {ticker}: {e}")
+        return {}
 
 def get_news_brvm():
-    """
-    Récupère les actualités du marché BRVM depuis le flux RSS.
-    Returns: Liste de dictionnaires avec les actualités
-    """
+    """Récupère actualités BRVM"""
     news = []
-    
-    # Essayer le flux RSS officiel BRVM
-    rss_urls = [
-        f"{BASE_URL}/fr/actualites/rss",
-        "https://www.brvm.org/fr/actualites",
+    feeds = [
+        "https://www.sikafinance.com/rss",
+        "https://www.brvm.org/rss.xml",
+        "https://www.agenceecofin.com/rss/bourse",
     ]
-    
-    for url in rss_urls:
+    for feed_url in feeds:
         try:
-            if 'rss' in url:
-                feed = feedparser.parse(url)
-                if feed.entries:
-                    for entry in feed.entries[:10]:
-                        news.append({
-                            'titre': entry.get('title', ''),
-                            'date': entry.get('published', ''),
-                            'resume': entry.get('summary', ''),
-                            'lien': entry.get('link', '')
-                        })
-                    break
-            else:
-                # Scraping HTML des actualités
-                response = requests.get(url, headers=HEADERS, timeout=30)
-                soup = BeautifulSoup(response.content, 'lxml')
-                
-                articles = soup.find_all('article') or soup.find_all('div', class_='news-item')
-                for article in articles[:10]:
-                    title = article.find('h3') or article.find('h2')
-                    date = article.find('time') or article.find('.date')
-                    summary = article.find('p')
-                    
-                    if title:
-                        news.append({
-                            'titre': title.get_text(strip=True),
-                            'date': date.get_text(strip=True) if date else '',
-                            'resume': summary.get_text(strip=True) if summary else '',
-                            'lien': ''
-                        })
-                break
-        except Exception as e:
-            logger.warning(f"Erreur lors de la récupération des actualités: {e}")
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:5]:
+                news.append({
+                    "title": entry.get("title",""),
+                    "link": entry.get("link",""),
+                    "date": entry.get("published",""),
+                    "source": feed_url.split("/")[2]
+                })
+        except:
             continue
-    
-    # Si aucune actualité, utiliser les actualités de fallback
-    if not news:
-        news = get_fallback_news()
-    
-    return news
+    return news[:15]
 
-
-def parse_number(text):
-    """
-    Parse un texte en nombre, en gérant les formats français (virgule) et anglais (point).
-    """
-    if not text or text == '-' or text == '':
-        return 0
+def get_all_data(force_refresh=False):
+    """Point d'entrée principal — retourne toutes les données"""
+    if not force_refresh and cache_is_fresh():
+        return load_cache()
     
-    # Remplacer virgule par point pour les décimales
-    text = text.replace(',', '.').replace(' ', '').replace('\xa0', '')
+    print("Scraping données BRVM...")
+    cours_live = scrape_brvm_cours()
     
-    # Gérer les pourcentages
-    if '%' in text:
-        text = text.replace('%', '')
+    all_data = {}
+    for company in TICKERS_BRVM:
+        t = company["ticker"]
+        historique = scrape_sika_historique(t)
+        fondamentaux = scrape_sika_fondamentaux(t)
+        
+        all_data[t] = {
+            **company,
+            "cours_live": cours_live.get(t, {}),
+            "historique": historique,
+            "fondamentaux": fondamentaux,
+            "last_update": datetime.now().isoformat()
+        }
+        time.sleep(0.5)  # Respecter le serveur
     
-    try:
-        return float(text)
-    except ValueError:
-        return 0
-
-
-def get_fallback_cours():
-    """
-    Retourne des données de fallback en cas d'échec du scraping.
-    Ces données sont basées sur les principales actions BRVM.
-    """
-    logger.info("Utilisation des données de fallback")
+    all_data["_news"] = get_news_brvm()
+    all_data["_last_update"] = datetime.now().isoformat()
     
-    # Données des principales actions BRVM (données approximatives pour démonstration)
-    fallback_data = [
-        {'Symbole': 'BRVM.AO', 'Cours': 2450.00, 'Variation': 2.15, 'Ouverture': 2400.00, 'Haut': 2480.00, 'Bas': 2390.00, 'Volume': 45000},
-        {'Symbole': 'BRVM.SM', 'Cours': 1850.00, 'Variation': -0.85, 'Ouverture': 1865.00, 'Haut': 1870.00, 'Bas': 1840.00, 'Volume': 32000},
-        {'Symbole': 'BRVM.CI', 'Cours': 12500.00, 'Variation': 1.20, 'Ouverture': 12350.00, 'Haut': 12600.00, 'Bas': 12300.00, 'Volume': 28000},
-        {'Symbole': 'BRVM.TG', 'Cours': 4200.00, 'Variation': 0.50, 'Ouverture': 4180.00, 'Haut': 4250.00, 'Bas': 4170.00, 'Volume': 15000},
-        {'Symbole': 'BRVM.BF', 'Cours': 7800.00, 'Variation': -1.10, 'Ouverture': 7880.00, 'Haut': 7900.00, 'Bas': 7750.00, 'Volume': 22000},
-        {'Symbole': 'BACC.CI', 'Cours': 8450.00, 'Variation': 0.95, 'Ouverture': 8370.00, 'Haut': 8500.00, 'Bas': 8350.00, 'Volume': 18000},
-        {'Symbole': 'BOA.ML', 'Cours': 6100.00, 'Variation': 1.45, 'Ouverture': 6010.00, 'Haut': 6150.00, 'Bas': 5990.00, 'Volume': 25000},
-        {'Symbole': 'SONA.CI', 'Cours': 9200.00, 'Variation': -0.30, 'Ouverture': 9230.00, 'Haut': 9280.00, 'Bas': 9150.00, 'Volume': 12000},
-        {'Symbole': 'SMB.CI', 'Cours': 3100.00, 'Variation': 2.80, 'Ouverture': 3015.00, 'Haut': 3150.00, 'Bas': 3000.00, 'Volume': 35000},
-        {'Symbole': 'TTR.SN', 'Cours': 42000.00, 'Variation': -2.10, 'Ouverture': 42900.00, 'Haut': 43000.00, 'Bas': 41500.00, 'Volume': 8000},
-        {'Symbole': 'NSCC.SN', 'Cours': 18500.00, 'Variation': 1.05, 'Ouverture': 18320.00, 'Haut': 18650.00, 'Bas': 18250.00, 'Volume': 15000},
-        {'Symbole': 'ABidjan.CI', 'Cours': 5400.00, 'Variation': 0.75, 'Ouverture': 5360.00, 'Haut': 5450.00, 'Bas': 5340.00, 'Volume': 20000},
-        {'Symbole': 'PAL.CI', 'Cours': 2800.00, 'Variation': -0.50, 'Ouverture': 2815.00, 'Haut': 2830.00, 'Bas': 2780.00, 'Volume': 9000},
-        {'Symbole': 'SIC.CI', 'Cours': 7200.00, 'Variation': 1.80, 'Ouverture': 7070.00, 'Haut': 7250.00, 'Bas': 7050.00, 'Volume': 28000},
-        {'Symbole': 'STADE.CI', 'Cours': 4500.00, 'Variation': 0.00, 'Ouverture': 4500.00, 'Haut': 4520.00, 'Bas': 4480.00, 'Volume': 5000},
-        {'Symbole': 'ECOBANK', 'Cours': 2400.00, 'Variation': -1.25, 'Ouverture': 2430.00, 'Haut': 2440.00, 'Bas': 2385.00, 'Volume': 42000},
-        {'Symbole': 'SAORE.CI', 'Cours': 1850.00, 'Variation': 3.20, 'Ouverture': 1790.00, 'Haut': 1870.00, 'Bas': 1780.00, 'Volume': 16000},
-        {'Symbole': 'SOGB.CI', 'Cours': 6200.00, 'Variation': -0.80, 'Ouverture': 6250.00, 'Haut': 6270.00, 'Bas': 6180.00, 'Volume': 11000},
-        {'Symbole': 'BIE.CI', 'Cours': 1950.00, 'Variation': 1.55, 'Ouverture': 1920.00, 'Haut': 1970.00, 'Bas': 1910.00, 'Volume': 8000},
-        {'Symbole': 'BOA.BF', 'Cours': 3800.00, 'Variation': 0.65, 'Ouverture': 3775.00, 'Haut': 3820.00, 'Bas': 3760.00, 'Volume': 14000},
-        {'Symbole': 'UNX.CI', 'Cours': 1350.00, 'Variation': -2.20, 'Ouverture': 1380.00, 'Haut': 1390.00, 'Bas': 1340.00, 'Volume': 22000},
-        {'Symbole': 'SEDA.CI', 'Cours': 4100.00, 'Variation': 0.90, 'Ouverture': 4065.00, 'Haut': 4130.00, 'Bas': 4050.00, 'Volume': 10000},
-        {'Symbole': 'PERE.CI', 'Cours': 2800.00, 'Variation': -0.35, 'Ouverture': 2810.00, 'Haut': 2825.00, 'Bas': 2785.00, 'Volume': 6500},
-        {'Symbole': 'SECCI.CI', 'Cours': 5100.00, 'Variation': 2.40, 'Ouverture': 4980.00, 'Haut': 5150.00, 'Bas': 4950.00, 'Volume': 18000},
-        {'Symbole': 'CABC.CI', 'Cours': 2200.00, 'Variation': -1.80, 'Ouverture': 2240.00, 'Haut': 2250.00, 'Bas': 2180.00, 'Volume': 13000},
-        {'Symbole': 'SFTC.SN', 'Cours': 28500.00, 'Variation': 0.70, 'Ouverture': 28300.00, 'Haut': 28650.00, 'Bas': 28200.00, 'Volume': 9000},
-        {'Symbole': 'STC.BF', 'Cours': 5500.00, 'Variation': 1.10, 'Ouverture': 5440.00, 'Haut': 5520.00, 'Bas': 5420.00, 'Volume': 7500},
-        {'Symbole': 'ETI.TG', 'Cours': 3100.00, 'Variation': -0.45, 'Ouverture': 3115.00, 'Haut': 3130.00, 'Bas': 3085.00, 'Volume': 11000},
-        {'Symbole': 'SNTT.TG', 'Cours': 2400.00, 'Variation': 1.25, 'Ouverture': 2370.00, 'Haut': 2420.00, 'Bas': 2360.00, 'Volume': 8500},
-        {'Symbole': 'GSB.BF', 'Cours': 6800.00, 'Variation': 0.30, 'Ouverture': 6780.00, 'Haut': 6850.00, 'Bas': 6760.00, 'Volume': 6000},
-        {'Symbole': 'BOA.SM', 'Cours': 4200.00, 'Variation': 2.00, 'Ouverture': 4120.00, 'Haut': 4250.00, 'Bas': 4100.00, 'Volume': 19000},
-        {'Symbole': 'ATT.BF', 'Cours': 1850.00, 'Variation': -1.60, 'Ouverture': 1880.00, 'Haut': 1890.00, 'Bas': 1835.00, 'Volume': 12000},
-        {'Symbole': 'LOTO.CI', 'Cours': 4200.00, 'Variation': 0.50, 'Ouverture': 4180.00, 'Haut': 4230.00, 'Bas': 4165.00, 'Volume': 9500},
-        {'Symbole': 'SAGA.CI', 'Cours': 2800.00, 'Variation': -0.90, 'Ouverture': 2825.00, 'Haut': 2840.00, 'Bas': 2780.00, 'Volume': 7000},
-        {'Symbole': 'SAFA.CI', 'Cours': 1500.00, 'Variation': 1.70, 'Ouverture': 1475.00, 'Haut': 1520.00, 'Bas': 1465.00, 'Volume': 11000},
-        {'Symbole': 'SET.SN', 'Cours': 32000.00, 'Variation': -0.60, 'Ouverture': 32180.00, 'Haut': 32300.00, 'Bas': 31850.00, 'Volume': 5500},
-        {'Symbole': 'BOA.CI', 'Cours': 5100.00, 'Variation': 1.20, 'Ouverture': 5040.00, 'Haut': 5150.00, 'Bas': 5020.00, 'Volume': 23000},
-        {'Symbole': 'BNP.TG', 'Cours': 3700.00, 'Variation': -2.10, 'Ouverture': 3780.00, 'Haut': 3800.00, 'Bas': 3650.00, 'Volume': 16000},
-        {'Symbole': 'SAFCA.CI', 'Cours': 2100.00, 'Variation': 0.95, 'Ouverture': 2080.00, 'Haut': 2125.00, 'Bas': 2070.00, 'Volume': 8500},
-        {'Symbole': 'ONHP.TG', 'Cours': 4800.00, 'Variation': -0.50, 'Ouverture': 4825.00, 'Haut': 4850.00, 'Bas': 4770.00, 'Volume': 4000},
-        {'Symbole': 'SOTACI.CI', 'Cours': 3500.00, 'Variation': 2.30, 'Ouverture': 3420.00, 'Haut': 3550.00, 'Bas': 3400.00, 'Volume': 14000},
-        {'Symbole': 'NEOCARE.CI', 'Cours': 1900.00, 'Variation': 0.00, 'Ouverture': 1900.00, 'Haut': 1920.00, 'Bas': 1885.00, 'Volume': 6000},
-        {'Symbole': 'SMART.CI', 'Cours': 650.00, 'Variation': 5.00, 'Ouverture': 620.00, 'Haut': 670.00, 'Bas': 615.00, 'Volume': 45000},
-        {'Symbole': 'SICOR.CI', 'Cours': 2300.00, 'Variation': -1.30, 'Ouverture': 2330.00, 'Haut': 2345.00, 'Bas': 2285.00, 'Volume': 9000},
-        {'Symbole': 'LABELCI.CI', 'Cours': 1600.00, 'Variation': 1.90, 'Ouverture': 1570.00, 'Haut': 1625.00, 'Bas': 1560.00, 'Volume': 12000},
-        {'Symbole': 'SEMAC.CI', 'Cours': 1800.00, 'Variation': -0.55, 'Ouverture': 1810.00, 'Haut': 1825.00, 'Bas': 1790.00, 'Volume': 7500},
-        {'Symbole': 'CORALBA.CI', 'Cours': 2200.00, 'Variation': 0.45, 'Ouverture': 2190.00, 'Haut': 2220.00, 'Bas': 2175.00, 'Volume': 5500},
-        {'Symbole': 'SFB.CI', 'Cours': 4100.00, 'Variation': 1.75, 'Ouverture': 4030.00, 'Haut': 4150.00, 'Bas': 4010.00, 'Volume': 17000},
-        {'Symbole': 'SUCR.CI', 'Cours': 1350.00, 'Variation': -2.10, 'Ouverture': 1380.00, 'Haut': 1395.00, 'Bas': 1340.00, 'Volume': 10000},
-        {'Symbole': 'CIE.CI', 'Cours': 7800.00, 'Variation': 0.80, 'Ouverture': 7740.00, 'Haut': 7850.00, 'Bas': 7720.00, 'Volume': 21000},
-    ]
-    
-    return pd.DataFrame(fallback_data)
-
-
-def get_fallback_news():
-    """
-    Retourne des actualités de fallback en cas d'échec.
-    """
-    return [
-        {
-            'titre': 'Le marché BRVM总结 sur une tendance haussière',
-            'date': '10 Juin 2026',
-            'resume': 'Les indices régionaux démontrent une reprise progressive avec des volumes en hausse.',
-            'lien': ''
-        },
-        {
-            'titre': 'Nouveaux rapports trimestriels disponibles',
-            'date': '9 Juin 2026',
-            'resume': 'Les résultats du T1 2026 sont maintenant accessibles pour plusieurs entreprises.',
-            'lien': ''
-        },
-        {
-            'titre': 'L\'activité économique s\'améliore en zone UEMOA',
-            'date': '8 Juin 2026',
-            'resume': 'Les indicateurs économiques montrent une croissance soutenue dans la région.',
-            'lien': ''
-        },
-        {
-            'titre': 'Recommandations d\'analystes pour le secteur bancaire',
-            'date': '7 Juin 2026',
-            'resume': 'Les valeurs bancaires restent privilégiées par les analystes régionaux.',
-            'lien': ''
-        },
-        {
-            'titre': 'Ouverture de nouvelles émissions obligataires',
-            'date': '6 Juin 2026',
-            'resume': 'Plusieurs États de la région procèdent à des émissions de titres publics.',
-            'lien': ''
-        },
-    ]
-
-
-if __name__ == "__main__":
-    # Test du scraper
-    print("Test du scraper BRVM...")
-    
-    df = get_cours_brvm()
-    print(f"\nDonnées récupérées: {len(df)} actions")
-    print(df.head())
-    
-    news = get_news_brvm()
-    print(f"\nActualités récupérées: {len(news)} articles")
-    for n in news[:3]:
-        print(f"  - {n['titre']}")
+    save_cache(all_data)
+    return all_data
