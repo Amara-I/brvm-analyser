@@ -1,392 +1,784 @@
+"""
+app.py - Application Streamlit BRVM
+===================================
+Dashboard complet pour l'analyse des actions BRVM.
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import os
+import json
 from datetime import datetime, timedelta
-import json, os, io
-import streamlit_authenticator as stauth
-import bcrypt
+from typing import Dict, List, Optional
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 
-from scraper_brvm import get_all_data, TICKERS_BRVM
-from signals import build_dataframe, add_indicators, generate_signal, get_top5
-from alerts import check_and_send_alerts, generate_pdf_report
+# Import des modules locaux
+import signals
+import alerts
 
-# ── PAGE CONFIG ──────────────────────────────────────────────────────────────
+# ============================================================================
+# CONFIGURATION STREAMLIT
+# ============================================================================
+
 st.set_page_config(
     page_title="BRVM Analytics",
-    page_icon="📈",
+    page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        'About': '📊 BRVM Analytics - Analyse Technique & Fondamentale',
+        'Get Help': None,
+        'Report a bug': None
+    }
 )
 
-# ── CSS GLOBAL ───────────────────────────────────────────────────────────────
+# Configuration du style
 st.markdown("""
-<style>
-  .stApp { background-color: #080B12; color: #E2D9C5; }
-  .metric-card {
-    background: #0D1117; border: 1px solid #1C2333;
-    border-radius: 8px; padding: 12px 16px; margin: 4px;
-  }
-  .signal-badge {
-    display: inline-block; padding: 4px 12px;
-    border-radius: 4px; font-weight: bold; font-size: 0.85rem;
-  }
-  div[data-testid="stSidebar"] { background-color: #0D1117; }
-  .top5-card {
-    background: #0D1117; border: 1px solid #1C2333;
-    border-radius: 8px; padding: 10px 14px; margin: 6px 0;
-    cursor: pointer; transition: border-color 0.2s;
-  }
-  .top5-card:hover { border-color: #D4A843; }
-</style>
+    <style>
+    .main {
+        background-color: #f5f5f5;
+    }
+    .stMetric {
+        background-color: white;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .sidebar .stButton > button {
+        width: 100%;
+        margin-bottom: 10px;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 24px;
+    }
+    .recommendation-achat {
+        background-color: #d5f4e6;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #27ae60;
+    }
+    .recommendation-vente {
+        background-color: #fadbd8;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #e74c3c;
+    }
+    .recommendation-conserver {
+        background-color: #fdebd0;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #f39c12;
+    }
+    </style>
 """, unsafe_allow_html=True)
 
-# ── AUTHENTIFICATION ─────────────────────────────────────────────────────────
-def check_login():
-    if "authenticated" not in st.session_state:
+
+# ============================================================================
+# GESTION DE L'AUTHENTIFICATION
+# ============================================================================
+
+def check_authentication():
+    """
+    Vérifie l'authentification de l'utilisateur.
+    Charge les logins depuis st.secrets ou utilise admin/admin par défaut.
+    """
+    # Essayer de charger depuis secrets.toml
+    try:
+        admin_users = dict(st.secrets.get("auth", {}).get("admin", {}))
+        read_only_users = dict(st.secrets.get("auth", {}).get("users", {}))
+    except:
+        # Fallback: utiliser les crédentials par défaut pour les tests
+        admin_users = {"admin": "admin123", "admin@example.com": "password"}
+        read_only_users = {"user": "user123", "user@example.com": "password"}
+    
+    if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
+        st.session_state.username = None
+        st.session_state.is_admin = False
     
     if not st.session_state.authenticated:
+        # Page de login
         st.markdown("""
-        <div style='text-align:center;padding:60px 20px'>
-            <h1 style='color:#D4A843;font-size:2.5rem'>🏛️ BRVM Analytics</h1>
-            <p style='color:#6B7280'>Plateforme d'analyse professionnelle</p>
-        </div>
+            <div style="text-align: center; padding: 50px;">
+                <h1>🔐 Connexion BRVM Analytics</h1>
+                <p>Veuillez entrer vos identifiants pour accéder à l'application.</p>
+            </div>
         """, unsafe_allow_html=True)
         
-        col1, col2, col3 = st.columns([1,1,1])
+        col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             with st.form("login_form"):
-                st.markdown("### 🔐 Connexion")
-                username = st.text_input("Identifiant")
-                password = st.text_input("Mot de passe", type="password")
-                submitted = st.form_submit_button("Se connecter", use_container_width=True)
+                username = st.text_input("👤 Nom d'utilisateur")
+                password = st.text_input("🔑 Mot de passe", type="password")
+                submit = st.form_submit_button("Se connecter", type="primary")
                 
-                if submitted:
-                    ADMIN_USER = st.secrets.get("auth", {}).get("username", "admin")
-                    ADMIN_PASS = st.secrets.get("auth", {}).get("password", "brvm2024")
-                    if username == ADMIN_USER and password == ADMIN_PASS:
+                if submit:
+                    # Vérifier admin
+                    if username in admin_users and admin_users[username] == password:
                         st.session_state.authenticated = True
+                        st.session_state.username = username
+                        st.session_state.is_admin = True
+                        st.rerun()
+                    # Vérifier users
+                    elif username in read_only_users and read_only_users[username] == password:
+                        st.session_state.authenticated = True
+                        st.session_state.username = username
+                        st.session_state.is_admin = False
                         st.rerun()
                     else:
                         st.error("❌ Identifiants incorrects")
-        st.stop()
+        
+        # Info pour les tests
+        st.info("💡 Pour les tests: admin/admin123 ou user/user123")
+        return False
+    
+    return True
 
-check_login()
 
-# ── CHARGEMENT DONNÉES ───────────────────────────────────────────────────────
-@st.cache_data(ttl=3600, show_spinner="Chargement des données BRVM...")
-def load_data(force=False):
-    return get_all_data(force_refresh=force)
+def logout():
+    """Déconnexion."""
+    st.session_state.authenticated = False
+    st.session_state.username = None
+    st.session_state.is_admin = False
+    st.rerun()
 
-@st.cache_data(ttl=3600, show_spinner="Calcul des signaux...")
-def compute_all_signals(data_hash):
-    data = load_data()
-    signals = {}
-    for company in TICKERS_BRVM:
-        t = company["ticker"]
-        co_data = data.get(t, {})
-        hist    = co_data.get("historique", [])
-        df      = build_dataframe(hist)
-        df      = add_indicators(df) if df is not None else None
-        sig     = generate_signal(df, co_data)
-        sig["name"]    = company["name"]
-        sig["sector"]  = company["sector"]
-        sig["country"] = company["country"]
-        sig["flag"]    = company["flag"]
-        sig["df"]      = df
-        signals[t]     = sig
-    return signals
 
-# ── SIDEBAR ──────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("""
-    <div style='text-align:center;padding:10px'>
-        <h2 style='color:#D4A843;margin:0'>🏛️ BRVM</h2>
-        <p style='color:#6B7280;font-size:0.7rem;margin:0'>Analytics Platform</p>
-    </div>
-    """, unsafe_allow_html=True)
-    st.divider()
-    
-    page = st.radio("📍 Navigation", [
-        "🏠 Tableau de bord",
-        "📊 Analyse détaillée",
-        "📈 Graphique avancé",
-        "🔮 Projections",
-        "⚖️ Comparaison",
-        "⚙️ Paramètres"
-    ])
-    
-    st.divider()
-    
-    # Forcer refresh
-    if st.button("🔄 Actualiser données", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-    
-    # Dernière MAJ
-    st.markdown(f"<div style='color:#6B7280;font-size:0.65rem;text-align:center'>MAJ: {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>", unsafe_allow_html=True)
-    
-    if st.button("🚪 Déconnexion", use_container_width=True):
-        st.session_state.authenticated = False
-        st.rerun()
+# ============================================================================
+# FONCTIONS D'AFFICHAGE
+# ============================================================================
 
-# ── CHARGEMENT ───────────────────────────────────────────────────────────────
-with st.spinner("Chargement..."):
-    all_data    = load_data()
-    all_signals = compute_all_signals(str(datetime.now().date()))
+def format_number(number: float, decimals: int = 2) -> str:
+    """Formate un nombre avec les séparateurs appropriés."""
+    if number is None:
+        return "N/A"
+    return f"{number:,.{decimals}f}".replace(",", " ")
 
-top_buy, top_sell = get_top5(all_signals)
-news = all_data.get("_news", [])
 
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE 1 — TABLEAU DE BORD
-# ════════════════════════════════════════════════════════════════════════════
-if "Tableau" in page:
-    st.markdown("## 🏠 Tableau de bord — Marché BRVM")
-    
-    # ── KPIs marché
-    scores = [v["score"] for v in all_signals.values()]
-    nb_buy  = sum(1 for s in scores if s >= 65)
-    nb_sell = sum(1 for s in scores if s < 35)
-    avg_sc  = np.mean(scores)
-    
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("📊 Actions cotées", len(TICKERS_BRVM))
-    k2.metric("🟢 Signaux ACHAT", nb_buy)
-    k3.metric("🔴 Signaux VENTE", nb_sell)
-    k4.metric("📈 Score moyen", f"{avg_sc:.0f}/100")
-    k5.metric("🕐 Dernière MAJ", datetime.now().strftime("%H:%M"))
-    
-    st.divider()
-    
-    col_buy, col_sell = st.columns(2)
-    
-    with col_buy:
-        st.markdown("### 🟢 TOP 5 — À ACHETER")
-        for ticker, sig in top_buy:
-            with st.container():
-                if st.button(
-                    f"{sig['flag'] if 'flag' in sig else ''} **{ticker}** — {sig['name']}\n"
-                    f"Score: **{sig['score']}/100** | {sig['signal']} | RSI: {sig['last_rsi']:.1f}",
-                    key=f"buy_{ticker}",
-                    use_container_width=True
-                ):
-                    st.session_state["selected_ticker"] = ticker
-                    st.session_state["goto_detail"] = True
-    
-    with col_sell:
-        st.markdown("### 🔴 TOP 5 — À VENDRE")
-        for ticker, sig in top_sell:
-            with st.container():
-                if st.button(
-                    f"{sig.get('flag','')} **{ticker}** — {sig['name']}\n"
-                    f"Score: **{sig['score']}/100** | {sig['signal']} | RSI: {sig['last_rsi']:.1f}",
-                    key=f"sell_{ticker}",
-                    use_container_width=True
-                ):
-                    st.session_state["selected_ticker"] = ticker
-                    st.session_state["goto_detail"] = True
-    
-    st.divider()
-    
-    # ── Tableau complet marché
-    st.markdown("### 📋 Vue d'ensemble — Toutes les actions")
-    
-    sector_filter = st.selectbox("Filtrer par secteur", 
-        ["Tous"] + sorted(list(set(s["sector"] for s in all_signals.values()))))
-    
-    rows = []
-    for ticker, sig in sorted(all_signals.items(), key=lambda x: x[1]["score"], reverse=True):
-        if sector_filter != "Tous" and sig.get("sector") != sector_filter:
-            continue
-        rows.append({
-            "": sig.get("flag",""),
-            "Ticker": ticker,
-            "Société": sig.get("name",""),
-            "Pays": sig.get("country",""),
-            "Secteur": sig.get("sector",""),
-            "Signal": sig["signal"],
-            "Score": sig["score"],
-            "Cours": f"{sig['last_close']:,.0f}",
-            "RSI": f"{sig['last_rsi']:.1f}",
-        })
-    
-    df_display = pd.DataFrame(rows)
-    
-    def color_signal(val):
-        colors = {
-            "ACHAT FORT": "background-color:#16532d;color:white",
-            "ACHAT": "background-color:#1a4d1a;color:white",
-            "CONSERVER": "background-color:#4d3d00;color:white",
-            "ALLÉGER": "background-color:#4d1f00;color:white",
-            "VENDRE": "background-color:#4d0000;color:white",
-        }
-        return colors.get(val, "")
-    
-    styled = df_display.style.applymap(color_signal, subset=["Signal"])
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=400)
-    
-    # ── Actualités
-    st.divider()
-    st.markdown("### 📰 Actualités BRVM")
-    if news:
-        for item in news[:6]:
-            st.markdown(f"• [{item['title']}]({item['link']}) — *{item.get('source','')}*")
-    else:
-        st.info("Aucune actualité disponible")
+def get_recommendation_style(recommendation: str) -> str:
+    """Retourne le style CSS pour la recommandation."""
+    styles = {
+        "ACHAT": "recommendation-achat",
+        "VENTE": "recommendation-vente",
+        "CONSERVER": "recommendation-conserver",
+        "NEUTRE": "recommendation-conserver"
+    }
+    return styles.get(recommendation, "")
 
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE 2 — ANALYSE DÉTAILLÉE
-# ════════════════════════════════════════════════════════════════════════════
-elif "Analyse" in page:
-    st.markdown("## 📊 Analyse détaillée")
+
+def plot_candlestick(df: pd.DataFrame, ticker: str) -> go.Figure:
+    """
+    Crée un graphique chandelier pour les données historiques.
+    """
+    if df is None or len(df) == 0:
+        return None
     
-    default_t = st.session_state.get("selected_ticker", "SNTS")
-    ticker = st.selectbox("Choisir une action", 
-        [c["ticker"] for c in TICKERS_BRVM],
-        index=[c["ticker"] for c in TICKERS_BRVM].index(default_t) if default_t in [c["ticker"] for c in TICKERS_BRVM] else 0
+    fig = go.Figure(data=[go.Candlestick(
+        x=df['date'],
+        open=df['open'],
+        high=df['high'],
+        low=df['low'],
+        close=df['close'],
+        name=ticker
+    )])
+    
+    fig.update_layout(
+        title=f"Cours {ticker}",
+        yaxis_title="Prix (XOF)",
+        xaxis_title="Date",
+        template="plotly_white",
+        height=400,
+        xaxis_rangeslider_visible=False
     )
     
-    sig  = all_signals.get(ticker, {})
-    df   = sig.get("df")
-    co   = all_data.get(ticker, {})
-    fond = co.get("fondamentaux", {})
-    
-    # ── Header société
-    col_h1, col_h2, col_h3 = st.columns([2,1,1])
-    with col_h1:
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div style='font-size:1.5rem;font-weight:700'>{sig.get('flag','')} {sig.get('name','')}</div>
-            <div style='color:#6B7280'>{sig.get('country','')} · {sig.get('sector','')}</div>
-            <div style='font-size:1.8rem;font-weight:700;color:#D4A843'>{sig['last_close']:,.0f} FCFA</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col_h2:
-        score = sig["score"]
-        color = sig["color"]
-        st.markdown(f"""
-        <div class='metric-card' style='text-align:center'>
-            <div style='font-size:2.5rem;font-weight:900;color:{color}'>{score}</div>
-            <div style='font-size:0.7rem;color:#6B7280'>SCORE /100</div>
-            <div style='background:{color};color:white;padding:4px 10px;border-radius:4px;font-weight:700;margin-top:8px'>{sig['signal']}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col_h3:
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div style='font-size:0.65rem;color:#6B7280'>RSI (14)</div>
-            <div style='font-size:1.4rem;font-weight:700'>{sig['last_rsi']:.1f}</div>
-            <div style='font-size:0.65rem;color:#6B7280;margin-top:6px'>MACD</div>
-            <div style='font-size:1.1rem;color:{"#22C55E" if sig["last_macd"]>0 else "#EF4444"}'>{sig['last_macd']:.2f}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.divider()
-    
-    # ── Résumé analyse
-    st.markdown("### 🔍 Résumé d'analyse")
-    st.markdown(sig.get("resume","Données insuffisantes"))
-    
-    with st.expander("📋 Tous les points d'analyse"):
-        for p in sig.get("points", []):
-            st.write(p)
-    
-    # ── Fondamentaux
-    st.divider()
-    st.markdown("### 📑 Analyse Fondamentale")
-    
-    f1, f2, f3, f4 = st.columns(4)
-    f1.metric("PER", fond.get("per", co.get("per", "N/D")))
-    f2.metric("Capitalisation", fond.get("mktcap", co.get("mktcap", "N/D")))
-    f3.metric("Dividende", fond.get("dividende", "N/D"))
-    f4.metric("Rend. dividende", 
-        f"{(fond.get('dividende',0)/sig['last_close']*100):.2f}%" if sig['last_close'] > 0 and fond.get('dividende') else "N/D")
-    
-    # Historique dividendes
-    hist_prices = co.get("historique", [])
-    if hist_prices:
-        df_hist = build_dataframe(hist_prices)
-        if df_hist is not None and len(df_hist) > 0:
-            st.markdown("#### 📅 Historique des cours")
-            fig_hist = go.Figure()
-            fig_hist.add_trace(go.Scatter(
-                x=df_hist["date"], y=df_hist["close"],
-                mode="lines", name="Cours clôture",
-                line=dict(color="#D4A843", width=2)
-            ))
-            fig_hist.update_layout(
-                template="plotly_dark", paper_bgcolor="#0D1117",
-                plot_bgcolor="#0D1117", height=300,
-                margin=dict(l=10,r=10,t=10,b=10)
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
+    return fig
 
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE 3 — GRAPHIQUE AVANCÉ
-# ════════════════════════════════════════════════════════════════════════════
-elif "Graphique" in page:
-    st.markdown("## 📈 Graphique Technique Avancé")
+
+def plot_indicators(df: pd.DataFrame, ticker: str) -> go.Figure:
+    """
+    Crée un graphique multi-indicateurs (RSI, MACD, Prix + SMA).
+    """
+    if df is None or len(df) < 20:
+        return None
     
-    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-    with col_s1:
-        ticker = st.selectbox("Action", [c["ticker"] for c in TICKERS_BRVM],
-            index=0, key="chart_ticker")
-    with col_s2:
-        periode = st.selectbox("Période", ["1 mois","3 mois","6 mois","1 an","2 ans","5 ans","Max"], index=3)
-    with col_s3:
-        freq = st.selectbox("Fréquence", ["Journalier","Hebdomadaire","Mensuel"], index=0)
-    with col_s4:
-        chart_type = st.selectbox("Type graphe", ["Bougies","Ligne","Aire"], index=0)
+    # Calculer les indicateurs
+    close = df['close']
+    rsi = signals.calculate_rsi(close, 14)
+    macd_line, signal_line = signals.calculate_macd(close)
+    sma_20 = signals.calculate_sma(close, 20)
+    sma_50 = signals.calculate_sma(close, 50)
     
-    # Indicateurs à afficher
-    st.markdown("**Indicateurs techniques :**")
-    ic1, ic2, ic3, ic4, ic5, ic6 = st.columns(6)
-    show_ma   = ic1.checkbox("MA20/50/200", value=True)
-    show_bb   = ic2.checkbox("Bollinger", value=True)
-    show_rsi  = ic3.checkbox("RSI", value=True)
-    show_macd = ic4.checkbox("MACD", value=True)
-    show_vol  = ic5.checkbox("Volume", value=True)
-    show_stoch= ic6.checkbox("Stochastique", value=False)
+    # Créer figure avec sous-graphes
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        subplot_titles=("Prix + SMA", "MACD", "RSI")
+    )
     
-    sig = all_signals.get(ticker, {})
-    df  = sig.get("df")
+    # Prix + SMA
+    fig.add_trace(go.Scatter(x=df['date'], y=df['close'], 
+                             name="Prix", line=dict(color='black', width=2)), 
+                  row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['date'], y=sma_20, 
+                             name="SMA 20", line=dict(color='blue', width=1)), 
+                  row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['date'], y=sma_50, 
+                             name="SMA 50", line=dict(color='red', width=1)), 
+                  row=1, col=1)
     
-    if df is None or len(df) < 5:
-        st.warning("⚠️ Données insuffisantes pour ce ticker")
-        st.stop()
+    # MACD
+    fig.add_trace(go.Scatter(x=df['date'], y=macd_line, 
+                             name="MACD", line=dict(color='blue')), 
+                  row=2, col=1)
+    fig.add_trace(go.Scatter(x=df['date'], y=signal_line, 
+                             name="Signal", line=dict(color='orange')), 
+                  row=2, col=1)
+    fig.add_trace(go.Bar(x=df['date'], y=macd_line - signal_line, 
+                         name="Histogramme", marker_color='gray'), 
+                  row=2, col=1)
     
-    # Filtrer par période
-    period_map = {
-        "1 mois": 30, "3 mois": 90, "6 mois": 180,
-        "1 an": 365, "2 ans": 730, "5 ans": 1825, "Max": 99999
+    # RSI
+    fig.add_trace(go.Scatter(x=df['date'], y=rsi, 
+                             name="RSI", line=dict(color='purple')), 
+                  row=3, col=1)
+    fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
+    
+    fig.update_layout(
+        height=600,
+        template="plotly_white",
+        showlegend=True
+    )
+    
+    return fig
+
+
+def plot_projection(df: pd.DataFrame, days: int = 30) -> go.Figure:
+    """
+    Crée une projection simple basée sur la tendance linéaire.
+    """
+    if df is None or len(df) < 10:
+        return None
+    
+    # Projection linéaire simple (à des fins d'illustration)
+    close = df['close'].values
+    x = np.arange(len(close))
+    
+    # Régression linéaire
+    coeffs = np.polyfit(x, close, 1)
+    trend = np.poly1d(coeffs)
+    
+    # Générer les dates futures
+    last_date = df['date'].iloc[-1]
+    future_dates = pd.date_range(start=last_date, periods=days + 1, freq='D')[1:]
+    
+    # Calculer les valeurs futures
+    future_x = np.arange(len(close), len(close) + days)
+    projected_values = trend(future_x)
+    
+    # Ajouter un peu de volatilité simulée
+    np.random.seed(42)
+    volatility = np.std(close) * 0.1
+    projected_upper = projected_values + np.random.uniform(0, volatility, days)
+    projected_lower = projected_values - np.random.uniform(0, volatility, days)
+    
+    # Créer le graphique
+    fig = go.Figure()
+    
+    # Données historiques
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['close'],
+        name="Historique",
+        line=dict(color='black', width=2)
+    ))
+    
+    # Projection
+    fig.add_trace(go.Scatter(
+        x=future_dates, y=projected_values,
+        name="Projection",
+        line=dict(color='blue', width=2, dash='dash')
+    ))
+    
+    # Fourchette
+    fig.add_trace(go.Scatter(
+        x=list(future_dates) + list(future_dates)[::-1],
+        y=list(projected_upper) + list(projected_lower)[::-1],
+        fill='toself',
+        fillcolor='rgba(52, 152, 219, 0.2)',
+        line=dict(color='rgba(255,255,255,0)'),
+        name="Fourchette"
+    ))
+    
+    fig.update_layout(
+        title=f"Projection des {days} prochains jours",
+        yaxis_title="Prix (XOF)",
+        xaxis_title="Date",
+        template="plotly_white",
+        height=400
+    )
+    
+    return fig
+
+
+# ============================================================================
+# PAGES DE L'APPLICATION
+# ============================================================================
+
+def page_accueil():
+    """Page d'accueil avec résumé du marché."""
+    st.header("📊 Tableau de Bord BRVM")
+    
+    # Rafraîchir les données
+    with st.spinner("🔄 Chargement des données..."):
+        data = signals.analyze_market()
+    
+    # Métriques principales
+    col1, col2, col3, col4 = st.columns(4)
+    
+    market_summary = data.get("market_summary", {})
+    brvm10 = market_summary.get("BRVM10", {})
+    brvmac = market_summary.get("BRVMAC", {})
+    
+    with col1:
+        st.metric("BRVM 10", 
+                  f"{brvm10.get('value', 'N/A')}", 
+                  f"{brvm10.get('change', 0):+.2f}%")
+    with col2:
+        st.metric("BRVM All-Share", 
+                  f"{brvmac.get('value', 'N/A')}",
+                  f"{brvmac.get('change', 0):+.2f}%")
+    with col3:
+        st.metric("Actions Analysées", f"{len(data.get('all_signals', []))}")
+    with col4:
+        st.metric("Dernière Analyse", 
+                  datetime.fromisoformat(data.get('analysis_date', datetime.now().isoformat())).strftime("%H:%M"))
+    
+    st.divider()
+    
+    # Top Achat et Top Vente
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("🔔 Top 5 ACHAT")
+        top_buy = data.get("top_buy", [])
+        
+        for i, s in enumerate(top_buy, 1):
+            with st.container():
+                st.markdown(f"""
+                <div class="recommendation-achat">
+                    <b>{i}. {s['ticker']}</b> - Score: {s['overall_score']}<br>
+                    <small>Prix: {s.get('price', 0):,.0f} XOF | {s.get('change', 0):+.2f}%</small>
+                </div>
+                """, unsafe_allow_html=True)
+                st.progress(s['overall_score'] / 100)
+    
+    with col2:
+        st.subheader("🔻 Top 5 VENTE")
+        top_sell = data.get("top_sell", [])
+        
+        for i, s in enumerate(top_sell, 1):
+            with st.container():
+                st.markdown(f"""
+                <div class="recommendation-vente">
+                    <b>{i}. {s['ticker']}</b> - Score: {s['overall_score']}<br>
+                    <small>Prix: {s.get('price', 0):,.0f} XOF | {s.get('change', 0):+.2f}%</small>
+                </div>
+                """, unsafe_allow_html=True)
+                st.progress(s['overall_score'] / 100)
+    
+    st.divider()
+    
+    # Tableau des signaux
+    st.subheader("📋 Tous les Signaux")
+    
+    # Filtres
+    col1, col2 = st.columns(2)
+    with col1:
+        filter_rec = st.selectbox("Filtrer par recommandation", 
+                                   ["Tous", "ACHAT", "CONSERVER", "NEUTRE", "VENTE"])
+    with col2:
+        filter_sector = st.selectbox("Filtrer par secteur", ["Tous"] + 
+                                       ["Banque", "Assurance", "Industrie", "Services", "Télécom"])
+    
+    # Préparer le dataframe
+    all_signals = data.get("all_signals", [])
+    df_signals = pd.DataFrame(all_signals)
+    
+    if not df_signals.empty:
+        # Appliquer les filtres
+        if filter_rec != "Tous":
+            df_signals = df_signals[df_signals['recommendation'] == filter_rec]
+        
+        if filter_sector != "Tous":
+            df_signals = df_signals[df_signals['fundamental_data'].apply(
+                lambda x: x.get('sector') == filter_sector if x else False)]
+        
+        # Afficher le tableau
+        display_cols = ['ticker', 'price', 'change', 'overall_score', 'recommendation']
+        st.dataframe(
+            df_signals[display_cols].style.format({
+                'price': '{:,.0f}',
+                'change': '{:+.2f}%',
+                'overall_score': '{:.0f}'
+            }),
+            use_container_width=True,
+            height=400
+        )
+
+
+def page_action(ticker: str):
+    """Page détaillée pour une action spécifique."""
+    st.header(f"📈 Analyse {ticker}")
+    
+    # Récupérer les données
+    signal = signals.get_signal_for_ticker(ticker)
+    
+    if not signal:
+        st.error(f"❌ Aucune donnée trouvée pour {ticker}")
+        return
+    
+    # Métriques principales
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Prix", f"{signal.get('price', 0):,.0f} XOF", 
+                  f"{signal.get('change', 0):+.2f}%")
+    with col2:
+        score = signal.get('overall_score', 0)
+        st.metric("Score Global", f"{score}/100", signal.get('recommendation', ''))
+    with col3:
+        st.metric("Volume", f"{signal.get('volume', 0):,}")
+    with col4:
+        fund = signal.get('fundamental_data', {})
+        st.metric("Secteur", fund.get('sector', 'N/A'))
+    
+    st.divider()
+    
+    # Onglets pour les détails
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Graphiques", "🔧 Signaux Techniques", 
+                                      "📈 Fondamentaux", "🔮 Projection"])
+    
+    with tab1:
+        # Générer les données historiques
+        current_price = signal.get('price', 3000)
+        historical = signals.generate_historical_data(ticker, current_price, 60)
+        
+        # Sélection de la période
+        periode = st.select_slider("Période", 
+                                   options=[7, 14, 30, 60, 90],
+                                   value=30)
+        
+        df_period = historical.tail(periode)
+        
+        # Graphique principal
+        fig = plot_candlestick(df_period, ticker)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Indicateurs
+        show_indicators = st.checkbox("Afficher les indicateurs techniques", value=True)
+        if show_indicators:
+            fig_indicators = plot_indicators(df_period, ticker)
+            if fig_indicators:
+                st.plotly_chart(fig_indicators, use_container_width=True)
+    
+    with tab2:
+        st.subheader("🔧 Indicateurs Techniques")
+        
+        tech = signal.get('technical_signals', {})
+        
+        # Grille d'indicateurs
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**RSI (14)**")
+            st.write(f"Valeur: {tech.get('rsi', 'N/A')}")
+            st.write(f"Signal: **{tech.get('rsi_signal', 'N/A')}**")
+            
+            st.markdown("**Stochastic**")
+            st.write(f"%K: {tech.get('stoch_k', 'N/A')}")
+            st.write(f"%D: {tech.get('stoch_d', 'N/A')}")
+            st.write(f"Signal: **{tech.get('stoch_signal', 'N/A')}**")
+        
+        with col2:
+            st.markdown("**MACD**")
+            st.write(f"Ligne MACD: {tech.get('macd', 'N/A')}")
+            st.write(f"Signal: **{tech.get('macd_signal', 'N/A')}**")
+            
+            st.markdown("**Bollinger**")
+            st.write(f"Position: **{tech.get('bb_position', 'N/A')}**")
+        
+        with col3:
+            st.markdown("**Moyennes Mobiles**")
+            st.write(f"SMA 20: {tech.get('sma_20', 'N/A'):,.0f}")
+            st.write(f"SMA 50: {tech.get('sma_50', 'N/A'):,.0f}")
+            st.write(f"Signal: **{tech.get('ma_signal', 'N/A')}**")
+            
+            st.markdown("**Tendance**")
+            st.write(f"**{tech.get('trend', 'N/A')}**")
+    
+    with tab3:
+        st.subheader("📈 Données Fondamentales")
+        
+        fund = signal.get('fundamental_data', {})
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.metric("Capitalisation", f"{fund.get('market_cap', 0):,.0f} XOF")
+            st.metric("P/E Ratio", f"{fund.get('pe_ratio', 0):.2f}")
+            st.metric("Rendement Dividende", f"{fund.get('dividend_yield', 0):.2f}%")
+        
+        with col2:
+            st.metric("ROE", f"{fund.get('roe', 0):.2f}%")
+            st.metric("Croissance Revenus", f"{fund.get('revenue_growth', 0):+.2f}%")
+            st.metric("Dette/Equity", f"{fund.get('debt_equity', 0):.2f}")
+        
+        st.divider()
+        st.write(f"**Note Analyste:** {fund.get('analyst_rating', 'N/A')}")
+        
+        # Score fondamental
+        fund_score = signal.get('fundamental_score', 0)
+        st.progress(fund_score / 100, text=f"Score Fondamental: {fund_score}/100")
+    
+    with tab4:
+        st.subheader("🔮 Projection Future")
+        
+        # Sélection de la durée
+        proj_days = st.slider("Jours de projection", 7, 90, 30)
+        
+        # Générer la projection
+        current_price = signal.get('price', 3000)
+        historical = signals.generate_historical_data(ticker, current_price, 60)
+        
+        fig_proj = plot_projection(historical, proj_days)
+        if fig_proj:
+            st.plotly_chart(fig_proj, use_container_width=True)
+        
+        st.warning("⚠️ Les projections sont uniquement informatives et basées sur une tendance linéaire. "
+                   "Elles ne constituent pas un conseil financier.")
+
+
+def page_signaux():
+    """Page avec tous les signaux et filtres avancés."""
+    st.header("🔍 Analyse Complète")
+    
+    with st.spinner("Chargement..."):
+        data = signals.analyze_market()
+    
+    all_signals = data.get("all_signals", [])
+    df = pd.DataFrame(all_signals)
+    
+    if df.empty:
+        st.error("Aucune donnée disponible")
+        return
+    
+    # Filtres avancés
+    st.subheader("🎛️ Filtres")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        min_score = st.slider("Score minimum", 0, 100, 0)
+    with col2:
+        max_score = st.slider("Score maximum", 0, 100, 100)
+    with col3:
+        secteur = st.selectbox("Secteur", ["Tous"] + 
+                                ["Banque", "Assurance", "Industrie", "Services", "Télécom"])
+    
+    # Appliquer les filtres
+    df_filtered = df[(df['overall_score'] >= min_score) & (df['overall_score'] <= max_score)]
+    
+    if secteur != "Tous":
+        df_filtered = df_filtered[df_filtered['fundamental_data'].apply(
+            lambda x: x.get('sector') == secteur if x else False)]
+    
+    # Afficher les résultats
+    st.write(f"**{len(df_filtered)}** actions correspondent aux filtres")
+    
+    # Préparer les colonnes à afficher
+    display_df = df_filtered[['ticker', 'price', 'change', 'overall_score', 
+                              'recommendation', 'fundamental_data']].copy()
+    display_df['secteur'] = display_df['fundamental_data'].apply(
+        lambda x: x.get('sector', 'N/A') if x else 'N/A')
+    display_df = display_df.drop('fundamental_data', axis=1)
+    
+    # Affichage interactif
+    st.dataframe(
+        display_df.style.format({
+            'price': '{:,.0f}',
+            'change': '{:+.2f}%',
+            'overall_score': '{:.0f}'
+        }),
+        use_container_width=True,
+        height=500
+    )
+    
+    # Bouton pour voir une action
+    st.subheader("🔎 Détail d'une action")
+    selected_ticker = st.selectbox("Sélectionner une action", df_filtered['ticker'].tolist())
+    if st.button("Voir le détail"):
+        st.session_state.page = "action"
+        st.session_state.selected_ticker = selected_ticker
+        st.rerun()
+
+
+def page_alertes():
+    """Page de configuration et test des alertes."""
+    st.header("🔔 Configuration des Alertes")
+    
+    if not st.session_state.get('is_admin', False):
+        st.warning("⚠️ Réservé aux administrateurs")
+        return
+    
+    st.info("📧 Cette page permet de tester l'envoi des alertes. "
+            "Configurez les paramètres dans secrets.toml pour la production.")
+    
+    # Formulaire de test
+    with st.form("test_alert"):
+        st.subheader("📤 Test d'alerte Email")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            sender_test = st.text_input("Email expéditeur (test)", 
+                                        placeholder="your_email@gmail.com")
+        with col2:
+            password_test = st.text_input("Mot de passe app", type="password",
+                                          placeholder="xxxx xxxx xxxx xxxx")
+        
+        recipients_test = st.text_input("Destinataires (séparés par virgule)",
+                                         placeholder="email1@gmail.com, email2@gmail.com")
+        
+        alert_type = st.radio("Type d'alerte", ["Résumé quotidien", "Action spécifique"])
+        
+        ticker_alert = None
+        if alert_type == "Action spécifique":
+            ticker_alert = st.text_input("Code action", placeholder="SIB")
+        
+        submit_test = st.form_submit_button("📤 Envoyer l'alerte de test")
+    
+    if submit_test:
+        if not sender_test or not password_test or not recipients_test:
+            st.error("❌ Veuillez remplir tous les champs")
+        else:
+            recipients_list = [r.strip() for r in recipients_test.split(",")]
+            
+            with st.spinner("Envoi en cours..."):
+                if alert_type == "Résumé quotidien":
+                    success = alerts.send_daily_alert(
+                        sender_email=sender_test,
+                        sender_password=password_test,
+                        recipient_emails=recipients_list,
+                        send_even_if_no_change=True
+                    )
+                else:
+                    if not ticker_alert:
+                        st.error("❌ Veuillez spécifier un code action")
+                    else:
+                        success = alerts.send_ticker_alert(
+                            ticker=ticker_alert,
+                            sender_email=sender_test,
+                            sender_password=password_test,
+                            recipient_emails=recipients_list
+                        )
+            
+            if success:
+                st.success("✅ Alerte envoyée avec succès!")
+            else:
+                st.error("❌ Échec de l'envoi. Vérifiez les paramètres.")
+    
+    st.divider()
+    
+    # Instructions
+    st.subheader("📋 Instructions de configuration")
+    
+    st.markdown("""
+    ### Configuration Gmail
+    
+    1. Allez sur [Google Account](https://myaccount.google.com)
+    2. Sécurité → Validation en 2 étapes → Activer
+    3. Mots de passe d'application → Créer un mot de passe
+    4. Utiliser ce mot de passe dans l'application
+    
+    ### Configuration Streamlit Cloud
+    
+    Dans `secrets.toml`:
+    ```toml
+    [email]
+    sender = "your_email@gmail.com"
+    password = "your_app_password"
+    recipients = ["email1@gmail.com", "email2@gmail.com"]
+    alert_time = "17:30"
+    ```
+    """)
+
+
+# ============================================================================
+# NAVIGATION PRINCIPALE
+# ============================================================================
+
+def main():
+    """Fonction principale de l'application."""
+    
+    # Vérifier l'authentification
+    if not check_authentication():
+        return
+    
+    # Sidebar - Navigation
+    st.sidebar.title("🧭 Navigation")
+    
+    # Info utilisateur
+    st.sidebar.markdown(f"""
+    ---
+    **Utilisateur:** {st.session_state.username}
+    **Rôle:** {'Admin' if st.session_state.is_admin else 'Lecture seule'}
+    """)
+    
+    # Menu de navigation
+    pages = {
+        "🏠 Accueil": "accueil",
+        "🔍 Tous les Signaux": "signaux",
+        "🔔 Alertes (Admin)": "alertes"
     }
-    days = period_map[periode]
-    cutoff = datetime.now() - timedelta(days=days)
-    df_plot = df[df["date"] >= pd.Timestamp(cutoff)].copy()
     
-    # Rééchantillonnage
-    if freq == "Hebdomadaire":
-        df_plot = df_plot.set_index("date").resample("W").agg({
-            "open":"first","high":"max","low":"min","close":"last","volume":"sum"
-        }).dropna().reset_index()
-    elif freq == "Mensuel":
-        df_plot = df_plot.set_index("date").resample("M").agg({
-            "open":"first","high":"max","low":"min","close":"last","volume":"sum"
-        }).dropna().reset_index()
+    selected_page = st.sidebar.radio("Aller à", list(pages.keys()))
     
-    # Recalculer indicateurs sur df_plot
-    df_plot = add_indicators(df_plot)
+    # Gestion de la page action (sélectionnée depuis une autre page)
+    if 'selected_ticker' in st.session_state and 'page' in st.session_state:
+        if st.session_state.page == "action":
+            page_action(st.session_state.selected_ticker)
+            st.session_state.page = None
+            return
     
-    # ── Nombre de sous-graphiques
-    n_rows = 1
-    row_heights = [0.5]
-    specs_list  = [{"secondary_y": False}]
+    # Afficher la page sélectionnée
+    page_key = pages[selected_page]
     
-    if show_vol:
-        n_rows += 1; row_heights.append(0.1); specs_list.append({"secondary_y": False})
-    if
+    if page_key == "accueil":
+        page_accueil()
+    elif page_key == "signaux":
+        page_signaux()
+    elif page_key == "alertes":
+        page_alertes()
+    
+    # Bouton de déconnexion
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🚪 Déconnexion"):
+        logout()
+    
+    # Footer
+    st.sidebar.markdown("""
+    ---
+    *BRVM Analytics v1.0*
+    
+    📊 Données: BRVM.org
+    
+    ℹ️ Les informations sont 
+    fournies à titre indicatif.
+    """)
+
+
+if __name__ == "__main__":
+    main()
