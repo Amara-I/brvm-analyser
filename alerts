@@ -1,0 +1,242 @@
+import smtplib
+import json, os
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+from fpdf import FPDF
+from datetime import datetime
+import streamlit as st
+
+SIGNAL_HISTORY_FILE = "data/signal_history.json"
+
+def load_signal_history():
+    if os.path.exists(SIGNAL_HISTORY_FILE):
+        with open(SIGNAL_HISTORY_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_signal_history(history):
+    os.makedirs("data", exist_ok=True)
+    with open(SIGNAL_HISTORY_FILE, "w") as f:
+        json.dump(history, f)
+
+def signal_changed(ticker, new_signal):
+    """Retourne True si le signal a changé depuis la dernière alerte"""
+    history = load_signal_history()
+    old = history.get(ticker, {}).get("signal")
+    return old != new_signal
+
+def update_signal_history(ticker, signal, score):
+    history = load_signal_history()
+    history[ticker] = {
+        "signal": signal,
+        "score": score,
+        "date": datetime.now().isoformat()
+    }
+    save_signal_history(history)
+
+def generate_pdf_report(signals_data, top_buy, top_sell):
+    """Génère un rapport PDF"""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # ── TITRE
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(212, 168, 67)
+    pdf.cell(0, 12, "BRVM Analytics — Rapport des Signaux", ln=True, align="C")
+    
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 6, f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}", ln=True, align="C")
+    pdf.ln(8)
+    
+    # ── TOP 5 ACHAT
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(34, 197, 94)
+    pdf.cell(0, 8, "TOP 5 — SIGNAUX ACHAT", ln=True)
+    pdf.set_draw_color(34, 197, 94)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(3)
+    
+    for ticker, sig in top_buy:
+        info = signals_data.get(ticker, {})
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(50, 50, 50)
+        pdf.cell(0, 7, f"{ticker} — {info.get('name','')}", ln=True)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(0, 5, f"Signal: {sig['signal']}  |  Score: {sig['score']}/100  |  Cours: {sig.get('last_close',0):,.0f} FCFA", ln=True)
+        points = sig.get("points", [])[:3]
+        for p in points:
+            clean_p = p.replace("✅","[OK]").replace("❌","[X]").replace("⚠️","[!]").replace("🔥","[!!]")
+            pdf.cell(0, 4, f"  {clean_p}", ln=True)
+        pdf.ln(2)
+    
+    pdf.ln(5)
+    
+    # ── TOP 5 VENTE
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(239, 68, 68)
+    pdf.cell(0, 8, "TOP 5 — SIGNAUX VENTE", ln=True)
+    pdf.set_draw_color(239, 68, 68)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(3)
+    
+    for ticker, sig in top_sell:
+        info = signals_data.get(ticker, {})
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(50, 50, 50)
+        pdf.cell(0, 7, f"{ticker} — {info.get('name','')}", ln=True)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(0, 5, f"Signal: {sig['signal']}  |  Score: {sig['score']}/100  |  Cours: {sig.get('last_close',0):,.0f} FCFA", ln=True)
+        points = sig.get("points", [])[:3]
+        for p in points:
+            clean_p = p.replace("✅","[OK]").replace("❌","[X]").replace("⚠️","[!]").replace("🔥","[!!]")
+            pdf.cell(0, 4, f"  {clean_p}", ln=True)
+        pdf.ln(2)
+    
+    # ── TABLEAU COMPLET
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(50, 50, 50)
+    pdf.cell(0, 8, "TABLEAU COMPLET DES SIGNAUX", ln=True)
+    pdf.ln(3)
+    
+    # En-têtes
+    pdf.set_fill_color(212, 168, 67)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.cell(25, 6, "Ticker", border=1, fill=True)
+    pdf.cell(55, 6, "Société", border=1, fill=True)
+    pdf.cell(30, 6, "Signal", border=1, fill=True)
+    pdf.cell(20, 6, "Score", border=1, fill=True)
+    pdf.cell(30, 6, "Cours FCFA", border=1, fill=True)
+    pdf.cell(30, 6, "RSI", border=1, fill=True, ln=True)
+    
+    pdf.set_font("Helvetica", "", 8)
+    for ticker, sig in sorted(signals_data.items(), key=lambda x: x[1].get("score",0), reverse=True):
+        if ticker.startswith("_"):
+            continue
+        pdf.set_text_color(50, 50, 50)
+        pdf.set_fill_color(248, 248, 248)
+        fill = ticker in [t for t,_ in top_buy]
+        if fill:
+            pdf.set_fill_color(220, 255, 220)
+        pdf.cell(25, 5, ticker, border=1, fill=fill)
+        pdf.cell(55, 5, sig.get("name","")[:25], border=1, fill=fill)
+        pdf.cell(30, 5, sig.get("signal",""), border=1, fill=fill)
+        pdf.cell(20, 5, str(sig.get("score",0)), border=1, fill=fill)
+        pdf.cell(30, 5, f"{sig.get('last_close',0):,.0f}", border=1, fill=fill)
+        pdf.cell(30, 5, f"{sig.get('last_rsi',0):.1f}", border=1, fill=fill, ln=True)
+    
+    pdf.ln(8)
+    pdf.set_font("Helvetica", "I", 7)
+    pdf.set_text_color(120,120,120)
+    pdf.cell(0, 5, "⚠️ Ce rapport est fourni à titre informatif uniquement. Il ne constitue pas un conseil en investissement.", ln=True)
+    
+    path = "data/rapport_brvm.pdf"
+    pdf.output(path)
+    return path
+
+def send_email_alert(to_email, subject, body_html, pdf_path=None):
+    """Envoie un email avec rapport PDF en pièce jointe"""
+    try:
+        smtp_server = st.secrets["email"]["smtp_server"]
+        smtp_port   = int(st.secrets["email"]["smtp_port"])
+        smtp_user   = st.secrets["email"]["smtp_user"]
+        smtp_pass   = st.secrets["email"]["smtp_pass"]
+    except:
+        print("Credentials email non configurés")
+        return False
+    
+    msg = MIMEMultipart("mixed")
+    msg["From"]    = smtp_user
+    msg["To"]      = to_email
+    msg["Subject"] = subject
+    
+    # Corps HTML
+    html_part = MIMEText(body_html, "html")
+    msg.attach(html_part)
+    
+    # PDF en pièce jointe
+    if pdf_path and os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f:
+            pdf_part = MIMEApplication(f.read(), _subtype="pdf")
+            pdf_part.add_header("Content-Disposition", "attachment",
+                                filename=f"BRVM_Rapport_{datetime.now().strftime('%Y%m%d')}.pdf")
+            msg.attach(pdf_part)
+    
+    try:
+        with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_user, to_email, msg.as_string())
+        print(f"Email envoyé à {to_email}")
+        return True
+    except Exception as e:
+        print(f"Erreur envoi email: {e}")
+        return False
+
+def check_and_send_alerts(all_signals, top_buy, top_sell, admin_email):
+    """Envoie alerte seulement si un signal a changé"""
+    changed = []
+    for ticker, sig in all_signals.items():
+        if ticker.startswith("_"):
+            continue
+        if signal_changed(ticker, sig["signal"]):
+            changed.append((ticker, sig))
+            update_signal_history(ticker, sig["signal"], sig["score"])
+    
+    if not changed:
+        return False, "Aucun changement de signal détecté"
+    
+    # Générer PDF
+    pdf_path = generate_pdf_report(all_signals, top_buy, top_sell)
+    
+    # Corps email HTML
+    changed_html = "".join([
+        f"""<tr>
+            <td style='padding:8px;font-weight:bold'>{t}</td>
+            <td style='padding:8px'>{s['signal']}</td>
+            <td style='padding:8px;color:{s['color']}'>{s['score']}/100</td>
+        </tr>"""
+        for t, s in changed[:10]
+    ])
+    
+    body = f"""
+    <html><body style='font-family:Arial;background:#f5f5f5;padding:20px'>
+    <div style='background:white;padding:20px;border-radius:8px;max-width:600px;margin:auto'>
+        <h2 style='color:#D4A843'>🏛️ BRVM Analytics — Alerte Signaux</h2>
+        <p style='color:#666'>{datetime.now().strftime('%d/%m/%Y à %H:%M')}</p>
+        
+        <h3 style='color:#22C55E'>🟢 TOP 5 ACHAT</h3>
+        {"".join([f"<p>• <b>{t}</b> — {s['signal']} ({s['score']}/100)</p>" for t,s in top_buy])}
+        
+        <h3 style='color:#EF4444'>🔴 TOP 5 VENTE</h3>
+        {"".join([f"<p>• <b>{t}</b> — {s['signal']} ({s['score']}/100)</p>" for t,s in top_sell])}
+        
+        <h3>📋 Signaux modifiés ({len(changed)})</h3>
+        <table style='width:100%;border-collapse:collapse'>
+            <tr style='background:#D4A843;color:white'>
+                <th style='padding:8px'>Ticker</th>
+                <th style='padding:8px'>Signal</th>
+                <th style='padding:8px'>Score</th>
+            </tr>
+            {changed_html}
+        </table>
+        
+        <p style='color:#999;font-size:11px;margin-top:20px'>
+        ⚠️ Ce rapport est informatif uniquement. Non responsable des décisions d'investissement.
+        </p>
+    </div></body></html>
+    """
+    
+    success = send_email_alert(
+        admin_email,
+        f"📊 BRVM — {len(changed)} signal(s) modifié(s) — {datetime.now().strftime('%d/%m/%Y')}",
+        body,
+        pdf_path
+    )
+    
+    return success, f"{len(changed)} signal(s) modifié(s), email {'envoyé' if success else 'échec'}"
