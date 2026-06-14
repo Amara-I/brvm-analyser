@@ -1,8 +1,9 @@
 [theme]
+base = "dark"
 primaryColor = "#00D084"
 backgroundColor = "#0E1F1A"
 secondaryBackgroundColor = "#1A3D32"
-textColor = "#E8F5E9"
+textColor = "#FFFFFF"
 font = "sans serif"
 
 [server]
@@ -17,3 +18,4 @@ gatherUsageStats = false
 [runner]
 magicEnabled = true
 fastReruns = true
+
