@@ -272,7 +272,7 @@ def calculate_technical_signals(ticker: str, historical_data: pd.DataFrame) -> D
         "macd_signal": "haussier" if last_macd > last_signal else "baissier",
         
         # Bollinger
-        "bb_position": "bas" if last_close < lower_bb.iloc[-1] if len(lower_bb) > 0 else "milieu" else ("haut" if last_close > upper_bb.iloc[-1] if len(upper_bb) > 0 else "milieu" else "milieu"),
+        "bb_position": ("bas" if (len(lower_bb) > 0 and last_close < lower_bb.iloc[-1]) else "haut" if (len(upper_bb) > 0 and last_close > upper_bb.iloc[-1]) else "milieu"),
         
         # Moyennes mobiles
         "sma_20": round(sma_20.iloc[-1], 2) if len(sma_20) > 0 else 0,
