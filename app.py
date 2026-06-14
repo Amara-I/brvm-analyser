@@ -37,42 +37,168 @@ st.set_page_config(
 
 # Configuration du style
 st.markdown("""
-    <style>
-    .main {
-        background-color: #f5f5f5;
-    }
-    .stMetric {
-        background-color: white;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .sidebar .stButton > button {
-        width: 100%;
-        margin-bottom: 10px;
-    }
-    div[data-testid="stMetricValue"] {
-        font-size: 24px;
-    }
-    .recommendation-achat {
-        background-color: #d5f4e6;
-        padding: 10px;
-        border-radius: 5px;
-        border-left: 4px solid #27ae60;
-    }
-    .recommendation-vente {
-        background-color: #fadbd8;
-        padding: 10px;
-        border-radius: 5px;
-        border-left: 4px solid #e74c3c;
-    }
-    .recommendation-conserver {
-        background-color: #fdebd0;
-        padding: 10px;
-        border-radius: 5px;
-        border-left: 4px solid #f39c12;
-    }
-    </style>
+<style>
+/* ===== FORCER TEXTE VISIBLE PARTOUT ===== */
+html, body, [class*="css"], .stApp {
+    color: #FFFFFF !important;
+}
+
+/* ===== MÉTRIQUES ===== */
+[data-testid="metric-container"] {
+    background: #1A3D32;
+    border: 1px solid #00D084;
+    border-radius: 12px;
+    padding: 16px;
+}
+[data-testid="metric-container"] label,
+[data-testid="stMetricLabel"] p {
+    color: #A8D5BA !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+}
+[data-testid="stMetricValue"] p,
+[data-testid="metric-container"] [data-testid="metric-value"] {
+    color: #FFFFFF !important;
+    font-size: 26px !important;
+    font-weight: 800 !important;
+}
+[data-testid="stMetricDelta"] p {
+    color: #00D084 !important;
+    font-size: 14px !important;
+}
+
+/* ===== HEADER ===== */
+.main-header {
+    background: linear-gradient(135deg, #1A3D32, #0E2D22);
+    border: 1px solid #00D084;
+    border-radius: 16px;
+    padding: 24px 32px;
+    margin-bottom: 24px;
+}
+.main-header h1 {
+    color: #FFFFFF !important;
+    font-size: 30px;
+    font-weight: 800;
+    margin: 0;
+}
+.main-header p {
+    color: #A8D5BA !important;
+    margin: 6px 0 0 0;
+    font-size: 14px;
+}
+
+/* ===== CARTES SIGNAUX ===== */
+.signal-card-buy {
+    background: linear-gradient(135deg, #0D3320, #082A18);
+    border: 2px solid #00C851;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin: 6px 0;
+}
+.signal-card-sell {
+    background: linear-gradient(135deg, #3a1515, #280d0d);
+    border: 2px solid #FF4444;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin: 6px 0;
+}
+.signal-card-buy h4,
+.signal-card-sell h4 {
+    color: #FFFFFF !important;
+    margin: 0 0 6px 0;
+    font-size: 15px;
+    font-weight: 700;
+}
+.signal-card-buy p,
+.signal-card-sell p {
+    color: #DDDDDD !important;
+    margin: 0;
+    font-size: 13px;
+}
+.score-badge-buy {
+    background: #00C851;
+    color: #000000 !important;
+    font-weight: 800;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 13px;
+    float: right;
+}
+.score-badge-sell {
+    background: #FF4444;
+    color: #FFFFFF !important;
+    font-weight: 800;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 13px;
+    float: right;
+}
+
+/* ===== TITRES ===== */
+h1, h2, h3, h4, h5, h6 {
+    color: #FFFFFF !important;
+}
+.stMarkdown p, .stMarkdown span {
+    color: #E0F0E8 !important;
+}
+
+/* ===== SIDEBAR ===== */
+[data-testid="stSidebar"] {
+    background-color: #0A2A1F !important;
+}
+[data-testid="stSidebar"] * {
+    color: #FFFFFF !important;
+}
+[data-testid="stSidebar"] .stSelectbox label,
+[data-testid="stSidebar"] .stSlider label {
+    color: #A8D5BA !important;
+}
+
+/* ===== TABS ===== */
+.stTabs [data-baseweb="tab"] {
+    color: #A8D5BA !important;
+    font-weight: 600;
+    font-size: 15px;
+}
+.stTabs [aria-selected="true"] {
+    color: #00D084 !important;
+    border-bottom: 3px solid #00D084 !important;
+}
+
+/* ===== BOUTONS ===== */
+.stButton > button {
+    background: linear-gradient(135deg, #00D084, #009960) !important;
+    color: #000000 !important;
+    font-weight: 700 !important;
+    border: none !important;
+    border-radius: 8px !important;
+}
+.stButton > button:hover {
+    background: linear-gradient(135deg, #00F09A, #00C070) !important;
+    transform: translateY(-1px);
+}
+
+/* ===== ALERTES ERREUR ===== */
+[data-testid="stAlert"] {
+    background: #1A3D32 !important;
+    color: #FFFFFF !important;
+    border: 1px solid #00D084 !important;
+}
+[data-testid="stAlert"] p {
+    color: #FFFFFF !important;
+}
+
+/* ===== DATAFRAME ===== */
+[data-testid="stDataFrame"] {
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+/* ===== PROGRESS BAR ===== */
+.stProgress > div > div {
+    background-color: #00D084 !important;
+}
+</style>
 """, unsafe_allow_html=True)
 
 
